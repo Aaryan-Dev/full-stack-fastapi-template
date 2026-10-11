@@ -57,6 +57,17 @@ def send_email(
     logger.info(f"send email result: {response}")
 
 
+def send_email_safely(*, email_to: str, subject: str, html_content: str) -> None:
+    """
+    Send an email from a background task: a delivery failure must be logged,
+    never raised, because there is no request left to report it to.
+    """
+    try:
+        send_email(email_to=email_to, subject=subject, html_content=html_content)
+    except Exception:
+        logger.exception("Failed to send email with subject %r", subject)
+
+
 def generate_test_email(email_to: str) -> EmailData:
     project_name = settings.PROJECT_NAME
     subject = f"{project_name} - Test email"
@@ -123,3 +134,30 @@ def verify_password_reset_token(token: str) -> str | None:
         return str(decoded_token["sub"])
     except InvalidTokenError:
         return None
+
+
+def send_password_recovery_email(*, email_to: str, email: str) -> None:
+    """
+    Build and send the password recovery email. Runs as a background task so that
+    response time does not depend on whether the account exists or on SMTP latency.
+    """
+    token = generate_password_reset_token(email=email)
+    email_data = generate_reset_password_email(
+        email_to=email_to, email=email, token=token
+    )
+    send_email_safely(
+        email_to=email_to,
+        subject=email_data.subject,
+        html_content=email_data.html_content,
+    )
+
+
+def send_new_account_email(*, email_to: str, username: str, password: str) -> None:
+    email_data = generate_new_account_email(
+        email_to=email_to, username=username, password=password
+    )
+    send_email_safely(
+        email_to=email_to,
+        subject=email_data.subject,
+        html_content=email_data.html_content,
+    )
