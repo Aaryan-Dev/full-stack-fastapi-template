@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -102,24 +104,60 @@ def generate_new_account_email(
     return EmailData(html_content=html_content, subject=subject)
 
 
-def generate_password_reset_token(email: str) -> str:
+@dataclass
+class PasswordResetClaims:
+    email: str
+    fingerprint: str
+
+
+def password_reset_fingerprint(hashed_password: str) -> str:
+    """
+    Derive a non-reversible marker of the current password hash.
+
+    It is embedded in reset tokens so that a token stops being valid as soon as
+    the password changes, which makes every reset link single use.
+    """
+    return hmac.new(
+        settings.SECRET_KEY.encode(), hashed_password.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def generate_password_reset_token(email: str, hashed_password: str) -> str:
     delta = timedelta(hours=settings.EMAIL_RESET_TOKEN_EXPIRE_HOURS)
     now = datetime.now(UTC)
     expires = now + delta
     exp = expires.timestamp()
     encoded_jwt = jwt.encode(
-        {"exp": exp, "nbf": now, "sub": email},
+        {
+            "exp": exp,
+            "nbf": now,
+            "sub": email,
+            "pwd": password_reset_fingerprint(hashed_password),
+        },
         settings.SECRET_KEY,
         algorithm=security.ALGORITHM,
     )
     return encoded_jwt
 
 
-def verify_password_reset_token(token: str) -> str | None:
+def verify_password_reset_token(token: str) -> PasswordResetClaims | None:
     try:
         decoded_token = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
-        return str(decoded_token["sub"])
     except InvalidTokenError:
         return None
+    email = decoded_token.get("sub")
+    fingerprint = decoded_token.get("pwd")
+    if not isinstance(email, str) or not isinstance(fingerprint, str):
+        # Tokens issued before the fingerprint claim existed are rejected
+        return None
+    return PasswordResetClaims(email=email, fingerprint=fingerprint)
+
+
+def is_password_reset_token_current(
+    claims: PasswordResetClaims, hashed_password: str
+) -> bool:
+    return hmac.compare_digest(
+        claims.fingerprint, password_reset_fingerprint(hashed_password)
+    )
