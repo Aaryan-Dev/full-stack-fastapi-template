@@ -1,7 +1,8 @@
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, func, select
 
 from app.core.security import get_password_hash, verify_password
 from app.models import Item, ItemCreate, User, UserCreate, UserUpdate
@@ -66,3 +67,27 @@ def create_item(*, session: Session, item_in: ItemCreate, owner_id: uuid.UUID) -
     session.commit()
     session.refresh(db_item)
     return db_item
+
+
+def get_items(
+    *,
+    session: Session,
+    skip: int,
+    limit: int,
+    owner_id: uuid.UUID | None = None,
+) -> tuple[Sequence[Item], int]:
+    """
+    Return a page of items (newest first) and the total count.
+
+    When ``owner_id`` is given only that user's items are considered.
+    """
+    count_statement = select(func.count()).select_from(Item)
+    statement = (
+        select(Item).order_by(col(Item.created_at).desc()).offset(skip).limit(limit)
+    )
+    if owner_id is not None:
+        count_statement = count_statement.where(Item.owner_id == owner_id)
+        statement = statement.where(Item.owner_id == owner_id)
+    count = session.exec(count_statement).one()
+    items = session.exec(statement).all()
+    return items, count
