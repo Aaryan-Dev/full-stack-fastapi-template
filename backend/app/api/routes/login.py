@@ -27,9 +27,16 @@ def login_access_token(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
-    user = crud.authenticate(
-        session=session, email=form_data.username, password=form_data.password
-    )
+    try:
+        user = crud.authenticate(
+            session=session, email=form_data.username, password=form_data.password
+        )
+    except crud.AccountLockedError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Try again later.",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect email or password")
     elif not user.is_active:

@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pydantic import EmailStr
+from sqlalchemy import DateTime
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -52,6 +53,12 @@ class User(UserBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str
     created_at: datetime | None = Field(default_factory=get_datetime_utc)
+    failed_login_attempts: int = Field(
+        default=0, sa_column_kwargs={"server_default": "0"}
+    )
+    locked_until: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
     items: list[Item] = Relationship(back_populates="owner", cascade_delete=True)
 
 
