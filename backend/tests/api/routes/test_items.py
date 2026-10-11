@@ -162,3 +162,26 @@ def test_delete_item_not_enough_permissions(
     assert response.status_code == 403
     content = response.json()
     assert content["detail"] == "Not enough permissions"
+
+
+def test_read_items_pagination_bounds(
+    client: TestClient, normal_user_token_headers: dict[str, str]
+) -> None:
+    for params in ({"skip": -1}, {"limit": 0}, {"limit": 101}, {"limit": -5}):
+        response = client.get(
+            f"{settings.API_V1_STR}/items/",
+            headers=normal_user_token_headers,
+            params=params,
+        )
+        assert response.status_code == 422, params
+
+
+def test_read_items_pagination_max_limit_allowed(
+    client: TestClient, normal_user_token_headers: dict[str, str]
+) -> None:
+    response = client.get(
+        f"{settings.API_V1_STR}/items/",
+        headers=normal_user_token_headers,
+        params={"skip": 0, "limit": 100},
+    )
+    assert response.status_code == 200

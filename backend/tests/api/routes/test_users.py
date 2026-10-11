@@ -198,6 +198,18 @@ def test_retrieve_users(
         assert "email" in item
 
 
+def test_retrieve_users_pagination_bounds(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    for params in ({"skip": -1}, {"limit": 0}, {"limit": 101}):
+        r = client.get(
+            f"{settings.API_V1_STR}/users/",
+            headers=superuser_token_headers,
+            params=params,
+        )
+        assert r.status_code == 422, params
+
+
 def test_update_user_me(
     client: TestClient, normal_user_token_headers: dict[str, str], db: Session
 ) -> None:
