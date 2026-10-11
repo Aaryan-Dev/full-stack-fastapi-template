@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Generator
 from typing import Annotated
 
@@ -11,7 +12,7 @@ from sqlmodel import Session
 from app.core import security
 from app.core.config import settings
 from app.core.db import engine
-from app.models import TokenPayload, User
+from app.models import Item, TokenPayload, User
 
 reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/login/access-token"
@@ -55,3 +56,18 @@ def get_current_active_superuser(current_user: CurrentUser) -> User:
             status_code=403, detail="The user doesn't have enough privileges"
         )
     return current_user
+
+
+def get_item_with_access(
+    *, session: Session, current_user: User, item_id: uuid.UUID
+) -> Item:
+    """
+    Load an item, enforcing that it exists and that the caller owns it
+    (superusers may access any item).
+    """
+    item = session.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not current_user.is_superuser and (item.owner_id != current_user.id):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    return item
