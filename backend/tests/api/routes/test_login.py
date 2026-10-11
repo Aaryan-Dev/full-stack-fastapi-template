@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from httpx import Response
 from pwdlib.hashers.bcrypt import BcryptHasher
 from sqlmodel import Session
 
@@ -189,3 +190,64 @@ def test_login_with_argon2_password_keeps_hash(client: TestClient, db: Session) 
 
     assert user.hashed_password == original_hash
     assert user.hashed_password.startswith("$argon2")
+
+
+def _login(client: TestClient, email: str, password: str) -> Response:
+    return client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": email, "password": password},
+    )
+
+
+def test_login_locks_account_after_repeated_failures(
+    client: TestClient, db: Session
+) -> None:
+    email = random_email()
+    password = random_lower_string()
+    create_user(session=db, user_create=UserCreate(email=email, password=password))
+
+    with patch("app.core.config.settings.LOGIN_MAX_FAILED_ATTEMPTS", 3):
+        for _ in range(3):
+            assert _login(client, email, "wrong-password").status_code == 400
+
+        # Even the correct password is refused while locked
+        r = _login(client, email, password)
+        assert r.status_code == 429
+        assert int(r.headers["Retry-After"]) > 0
+
+
+def test_login_success_resets_failed_attempts(client: TestClient, db: Session) -> None:
+    email = random_email()
+    password = random_lower_string()
+    user = create_user(
+        session=db, user_create=UserCreate(email=email, password=password)
+    )
+
+    with patch("app.core.config.settings.LOGIN_MAX_FAILED_ATTEMPTS", 3):
+        for _ in range(2):
+            assert _login(client, email, "wrong-password").status_code == 400
+        assert _login(client, email, password).status_code == 200
+
+        db.refresh(user)
+        assert user.failed_login_attempts == 0
+
+        for _ in range(2):
+            assert _login(client, email, "wrong-password").status_code == 400
+        assert _login(client, email, password).status_code == 200
+
+
+def test_login_lock_expires(client: TestClient, db: Session) -> None:
+    email = random_email()
+    password = random_lower_string()
+    user = create_user(
+        session=db, user_create=UserCreate(email=email, password=password)
+    )
+    user.failed_login_attempts = 5
+    user.locked_until = datetime.now(UTC) - timedelta(seconds=1)
+    db.add(user)
+    db.commit()
+
+    assert _login(client, email, password).status_code == 200
+    db.refresh(user)
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None

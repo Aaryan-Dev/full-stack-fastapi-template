@@ -1,8 +1,10 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.security import get_password_hash, verify_password
 from app.models import Item, ItemCreate, User, UserCreate, UserUpdate
 
@@ -42,6 +44,24 @@ def get_user_by_email(*, session: Session, email: str) -> User | None:
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
 
 
+class AccountLockedError(Exception):
+    """Raised when login is attempted on an account that is temporarily locked."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("Account temporarily locked")
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _register_failed_login(*, session: Session, db_user: User) -> None:
+    db_user.failed_login_attempts = db_user.failed_login_attempts + 1
+    if db_user.failed_login_attempts >= settings.LOGIN_MAX_FAILED_ATTEMPTS:
+        db_user.locked_until = datetime.now(UTC) + timedelta(
+            minutes=settings.LOGIN_LOCKOUT_MINUTES
+        )
+    session.add(db_user)
+    session.commit()
+
+
 def authenticate(*, session: Session, email: str, password: str) -> User | None:
     db_user = get_user_by_email(session=session, email=email)
     if not db_user:
@@ -49,14 +69,30 @@ def authenticate(*, session: Session, email: str, password: str) -> User | None:
         # This ensures the response time is similar whether or not the email exists
         verify_password(password, DUMMY_HASH)
         return None
+
+    if db_user.locked_until is not None:
+        remaining = db_user.locked_until - datetime.now(UTC)
+        if remaining.total_seconds() > 0:
+            raise AccountLockedError(
+                retry_after_seconds=int(remaining.total_seconds()) + 1
+            )
+        # Lock expired: start a fresh window instead of re-locking on the next typo
+        db_user.locked_until = None
+        db_user.failed_login_attempts = 0
+
     verified, updated_password_hash = verify_password(password, db_user.hashed_password)
     if not verified:
+        _register_failed_login(session=session, db_user=db_user)
         return None
+
     if updated_password_hash:
         db_user.hashed_password = updated_password_hash
-        session.add(db_user)
-        session.commit()
-        session.refresh(db_user)
+    if db_user.failed_login_attempts or db_user.locked_until is not None:
+        db_user.failed_login_attempts = 0
+        db_user.locked_until = None
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
     return db_user
 
 
