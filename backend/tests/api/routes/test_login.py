@@ -79,6 +79,48 @@ def test_recovery_password_user_not_exits(
     }
 
 
+def test_recovery_password_sends_email_in_background(
+    client: TestClient, db: Session
+) -> None:
+    email = random_email()
+    create_user(
+        session=db, user_create=UserCreate(email=email, password=random_lower_string())
+    )
+    with patch("app.api.routes.login.send_password_recovery_email") as send:
+        r = client.post(f"{settings.API_V1_STR}/password-recovery/{email}")
+
+    assert r.status_code == 200
+    send.assert_called_once_with(email_to=email, email=email)
+
+
+def test_recovery_password_unknown_email_sends_nothing(client: TestClient) -> None:
+    with patch("app.api.routes.login.send_password_recovery_email") as send:
+        r = client.post(f"{settings.API_V1_STR}/password-recovery/{random_email()}")
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "message": "If that email is registered, we sent a password recovery link"
+    }
+    send.assert_not_called()
+
+
+def test_recovery_password_html_content_sets_subject_header(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    email = random_email()
+    create_user(
+        session=db, user_create=UserCreate(email=email, password=random_lower_string())
+    )
+    r = client.post(
+        f"{settings.API_V1_STR}/password-recovery-html-content/{email}",
+        headers=superuser_token_headers,
+    )
+
+    assert r.status_code == 200
+    assert r.headers["subject"]
+    assert "subject:" not in r.headers
+
+
 def test_reset_password(client: TestClient, db: Session) -> None:
     email = random_email()
     password = random_lower_string()
